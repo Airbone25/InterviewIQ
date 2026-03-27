@@ -3,8 +3,11 @@ import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   Brain, Zap, Target, TrendingUp, MessageSquare,
-  ChevronRight, ArrowRight, Sparkles, Code2, BarChart3, Shield,
+  ChevronRight, ArrowRight, Sparkles, Code2, BarChart3, Shield, LayoutDashboard,
 } from 'lucide-react'
+import { useAuthStore } from '../context/auth.js'
+
+// ... (FEATURES, STEPS, STATS, MODES, fadeUp, stagger constants remain the same)
 
 const FEATURES = [
   { icon: Brain,        title: 'AI Interview Engine',    color: '#4f8ef7', glow: 'rgba(79,142,247,0.2)',   desc: 'A senior-engineer-grade AI that adapts to your resume, probes weak answers, and shifts difficulty in real time.' },
@@ -49,6 +52,8 @@ const stagger = {
 }
 
 export default function Landing() {
+  const { token } = useAuthStore()
+
   return (
     <div className="min-h-screen bg-void overflow-x-hidden">
 
@@ -69,10 +74,18 @@ export default function Landing() {
           </div>
 
           <div className="flex items-center gap-3">
-            <Link to="/login"  className="btn-ghost text-sm py-2 px-4">Sign in</Link>
-            <Link to="/signup" className="btn-primary text-sm py-2 px-4">
-              Get started <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
+            {token ? (
+              <Link to="/dashboard" className="btn-primary text-sm py-2 px-5 glow-electric">
+                Dashboard <LayoutDashboard className="w-3.5 h-3.5" />
+              </Link>
+            ) : (
+              <>
+                <Link to="/login"  className="btn-ghost text-sm py-2 px-4">Sign in</Link>
+                <Link to="/signup" className="btn-primary text-sm py-2 px-4">
+                  Get started <ChevronRight className="w-3.5 h-3.5" />
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </nav>
@@ -97,7 +110,7 @@ export default function Landing() {
         />
 
         <div className="relative z-10 text-center max-w-5xl mx-auto px-6 pb-32">
-          <motion.div
+          {/* <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
@@ -105,7 +118,7 @@ export default function Landing() {
           >
             <Sparkles className="w-3.5 h-3.5" />
             Powered by Groq AI — sub-second inference
-          </motion.div>
+          </motion.div> */}
 
           <motion.h1
             initial={{ opacity: 0, y: 32 }}
@@ -163,7 +176,7 @@ export default function Landing() {
         </div>
 
         {/* Preview bar at bottom of hero */}
-        <motion.div
+        {/* <motion.div
           initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.9, delay: 0.55, ease: [0.22, 1, 0.36, 1] }}
@@ -198,7 +211,7 @@ export default function Landing() {
               </div>
             </div>
           </div>
-        </motion.div>
+        </motion.div> */}
       </section>
 
       {/* ── Stats ── */}

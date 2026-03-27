@@ -48,13 +48,13 @@ export default function Navbar() {
         <div className="hidden md:flex items-center gap-1">
           {navLink('/dashboard', LayoutDashboard, 'Dashboard')}
           {navLink('/resume',    FileText,        'Resume')}
-          <Link
+          {/* <Link
             to="/dashboard"
             onClick={e => { e.preventDefault(); navigate('/dashboard', { state: { openModal: true } }) }}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm text-text-secondary hover:text-text-primary hover:bg-white/5 transition-all"
           >
             <Plus className="w-4 h-4" /> New Interview
-          </Link>
+          </Link> */}
         </div>
 
         {/* User menu */}
