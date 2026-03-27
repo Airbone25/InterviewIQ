@@ -4,7 +4,6 @@ const User = require('../models/User')
 
 const router = express.Router()
 
-// ─── GET /api/users/leaderboard — global rankings ──────────────────────────────
 router.get('/leaderboard', auth, async (req, res) => {
   try {
     const topUsers = await User.find({})

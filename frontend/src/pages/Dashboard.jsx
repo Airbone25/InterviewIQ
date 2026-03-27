@@ -162,8 +162,8 @@ export default function Dashboard() {
           <div className="flex-1">
             <p className="text-text-secondary text-sm mb-1">{greeting},</p>
             <div className="flex items-center gap-4">
-              <h1 className="font-display text-4xl font-bold text-text-primary">
-                {user?.name?.split(' ')[0]} 👋
+              <h1 className="font-mono text-4xl font-bold text-gradient-neon tracking-tight">
+                {user?.name?.split(' ')[0]}
               </h1>
               <div className="flex items-center gap-2 bg-white/5 border border-border/40 px-3 py-1 rounded-full">
                 <div className="w-6 h-6 rounded-full bg-neon/20 flex items-center justify-center text-[10px] font-bold text-neon border border-neon/30">
