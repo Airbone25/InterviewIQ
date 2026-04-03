@@ -19,7 +19,6 @@ export default function Interview() {
 
   const [interview,  setInterview]  = useState(null)
   const [messages,   setMessages]   = useState([])
-  const [answer,     setAnswer]     = useState('')
   const [phase,      setPhase]      = useState('loading') // loading | intro | qa | ending
   const [aiTyping,   setAiTyping]   = useState(false)
   const [loading,    setLoading]    = useState(false)
@@ -30,13 +29,15 @@ export default function Interview() {
   const [recording,  setRecording]  = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [quickScores, setQuickScores] = useState({ clarity: null, depth: null, confidence: null, relevance: null })
+  const [transcribingText, setTranscribingText] = useState('')
 
   const chatRef   = useRef(null)
   const timerRef  = useRef(null)
   const mediaRef  = useRef(null)
   const chunksRef = useRef([])
-
-  const userInitial = user?.name?.[0]?.toUpperCase() || 'U'
+  const videoRef  = useRef(null)
+  const streamRef = useRef(null)
+  const audioRef  = useRef(null)
 
   // ── Load interview ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -50,7 +51,6 @@ export default function Interview() {
         if (iv.completed) { navigate(`/results/${id}`); return }
 
         if (iv.questions?.length > 0) {
-          // Resuming
           const msgs = []
           iv.questions.forEach((q, i) => {
             msgs.push({ id: `q${i}`, role: 'ai',   content: q.text })
@@ -71,6 +71,34 @@ export default function Interview() {
     load()
   }, [id])
 
+  // ── User Camera Management ──────────────────────────────────────────────────
+  useEffect(() => {
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        streamRef.current = stream
+        if (videoRef.current) videoRef.current.srcObject = stream
+      } catch (err) {
+        console.warn("Camera access denied:", err)
+      }
+    }
+    if (phase !== 'loading') startCamera()
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+        streamRef.current = null
+      }
+    }
+  }, [phase])
+
+  const handleEndSession = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+    navigate('/dashboard')
+  }
+
   // ── Timer ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (timerOn) {
@@ -81,19 +109,16 @@ export default function Interview() {
     return () => clearInterval(timerRef.current)
   }, [timerOn])
 
-  // ── Scroll transcript ─────────────────────────────────────────────────────────────
+  // ── Scroll transcript ───────────────────────────────────────────────────────
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
-  }, [messages])
+  }, [messages, transcribingText, aiTyping])
 
-  // ── TTS Logic ───────────────────────────────────────────────────────────────
+  // ── TTS Logic (ElevenLabs with Browser Fallback) ───────────────────────────
   const getVoice = () => {
     return new Promise((resolve) => {
       let voices = window.speechSynthesis.getVoices()
-      if (voices.length !== 0) {
-        resolve(voices)
-        return
-      }
+      if (voices.length !== 0) { resolve(voices); return }
       window.speechSynthesis.onvoiceschanged = () => {
         voices = window.speechSynthesis.getVoices()
         resolve(voices)
@@ -101,31 +126,59 @@ export default function Interview() {
     })
   }
 
-  const speak = async (text) => {
+  const browserSpeakFallback = async (text) => {
     if (!window.speechSynthesis) return
-    
-    // Stop any current speaking
     window.speechSynthesis.cancel()
-    setIsSpeaking(false)
-    await delay(100) // Small gap
-
     const voices = await getVoice()
     const utt = new SpeechSynthesisUtterance(text)
     utt.rate = 0.95
     utt.pitch = 1.0
-    
     const pref = voices.find(v => (v.name.includes('Google') || v.name.includes('Natural')) && v.lang.startsWith('en-US')) ||
-                 voices.find(v => v.lang.startsWith('en-US')) || 
-                 voices.find(v => v.lang.startsWith('en')) ||
-                 voices[0]
+                 voices.find(v => v.lang.startsWith('en-US')) || voices[0]
     if (pref) utt.voice = pref
-
     return new Promise((resolve) => {
       utt.onstart = () => setIsSpeaking(true)
       utt.onend = () => { setIsSpeaking(false); resolve() }
       utt.onerror = () => { setIsSpeaking(false); resolve() }
       window.speechSynthesis.speak(utt)
     })
+  }
+
+  const speak = async (text) => {
+    try {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
+      setIsSpeaking(false)
+
+      // Try ElevenLabs
+      const res = await fetch(`${BASE}/api/speech/tts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ text })
+      })
+
+      if (!res.ok) throw new Error('ElevenLabs failed')
+
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      audioRef.current = audio
+
+      return new Promise((resolve) => {
+        audio.onplay = () => setIsSpeaking(true)
+        audio.onended = () => { setIsSpeaking(false); resolve() }
+        audio.onerror = () => { setIsSpeaking(false); resolve() }
+        audio.play()
+      })
+    } catch (err) {
+      console.warn('TTS Fallback active:', err.message)
+      return browserSpeakFallback(text)
+    }
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -145,12 +198,12 @@ export default function Interview() {
   const intro = async (iv) => {
     setAiTyping(true)
     const text = `Hello! I'm Alex Chen, your AI interviewer today. We'll conduct a ${typeLabel(iv)} interview. ` +
-                 `I'll ask ${MAX_Q} questions, with follow-ups where needed. When you're ready, press "Begin".`
+                 `I'll ask ${MAX_Q} questions. When you're ready, press "Begin".`
     await delay(1100)
     setAiTyping(false)
     addMsg('ai', text)
     setPhase('intro')
-    speak(text)
+    await speak(text)
   }
 
   // ── Fetch next question from backend ────────────────────────────────────────
@@ -172,19 +225,20 @@ export default function Interview() {
         setQCount(c => c + 1)
         setTimer(0)
         setTimerOn(true)
-        speak(data.question)
+        await speak(data.question)
       }
     } catch {
       setAiTyping(false)
-      toast.error('Connection error — please try again')
+      toast.error('Connection error')
     }
   }
 
   // ── Submit an answer ────────────────────────────────────────────────────────
-  const submitAnswer = async () => {
-    const txt = answer.trim()
+  const submitAnswer = async (manualText = null) => {
+    const txt = (manualText !== null ? manualText : transcribingText).trim()
     if (!txt || loading || aiTyping) return
-    setAnswer('')
+    
+    setTranscribingText('')
     setTimerOn(false)
     addMsg('user', txt)
     setLoading(true)
@@ -197,17 +251,14 @@ export default function Interview() {
       })
       const data = await res.json()
 
-      if (data.quickScores) {
-        setQuickScores(data.quickScores)
-      }
+      if (data.quickScores) setQuickScores(data.quickScores)
 
       if (data.feedback && !data.done) {
         setAiTyping(true)
-        await delay(700)
+        await delay(500)
         setAiTyping(false)
         addMsg('ai', data.feedback)
         await speak(data.feedback)
-        await delay(300)
       }
 
       if (data.done || qCount >= MAX_Q) {
@@ -224,11 +275,14 @@ export default function Interview() {
 
   // ── Finish and generate report ───────────────────────────────────────────────
   const finish = async () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
     setPhase('ending')
     setAiTyping(true)
-    const text = "That wraps up our session. You stayed focused throughout — that matters. " +
-                 "I'm compiling your full evaluation now."
-    await delay(1400)
+    const text = "That wraps up our session. I'm compiling your full evaluation now. Thank you for your time."
+    await delay(1000)
     setAiTyping(false)
     addMsg('ai', text)
     await speak(text)
@@ -237,8 +291,6 @@ export default function Interview() {
       setSubmitting(true)
       await apiFetch(`/api/interviews/${id}/complete`, { method: 'POST' })
       sessionStorage.setItem(`completed_${id}`, 'true')
-      toast.success('Report ready!')
-      await delay(800)
       navigate(`/results/${id}`)
     } catch {
       toast.error('Error generating report')
@@ -251,13 +303,9 @@ export default function Interview() {
     await fetchQuestion()
   }
 
-  const handleKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitAnswer() }
-  }
-
-  // ── Voice recording ─────────────────────────────────────────────────────────
+  // ── Voice recording with AUTO-SUBMIT ───────────────────────────────────────
   const toggleRecording = async () => {
-    if (isSpeaking) return
+    if (isSpeaking || loading) return
     if (recording) {
       mediaRef.current?.stop()
       setRecording(false)
@@ -274,6 +322,8 @@ export default function Interview() {
         const blob     = new Blob(chunksRef.current, { type: 'audio/webm' })
         const formData = new FormData()
         formData.append('audio', blob, 'answer.webm')
+        
+        setLoading(true) 
         try {
           const res  = await fetch(`${BASE}/api/speech/transcribe`, {
             method:  'POST',
@@ -281,12 +331,19 @@ export default function Interview() {
             body:    formData,
           })
           const data = await res.json()
-          if (data.text) {
-             // In "Press to talk" style, we might want to automatically submit
-             // but here we'll just set the text and let user confirm or press enter
-             setAnswer(prev => (prev ? prev + ' ' : '') + data.text)
+          setLoading(false)
+          
+          if (data.text && data.text.trim().length > 2) {
+             setTranscribingText(data.text)
+             await delay(1200) 
+             await submitAnswer(data.text)
+          } else if (data.text) {
+             toast.error("Answer too short, please try again")
           }
-        } catch { toast.error('Transcription failed') }
+        } catch { 
+          setLoading(false)
+          toast.error('Transcription failed') 
+        }
         stream.getTracks().forEach(t => t.stop())
       }
 
@@ -300,38 +357,37 @@ export default function Interview() {
   const fmt = (s) =>
     `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
 
-  // ── Render ──────────────────────────────────────────────────────────────────
   if (phase === 'loading') {
     return (
-      <div className="min-h-screen bg-void flex items-center justify-center">
+      <div className="h-screen bg-void flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-electric animate-spin" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-void flex flex-col pt-16">
+    <div className="h-screen bg-void flex flex-col overflow-hidden">
       
       {/* Header bar */}
-      <div className="glass border-b border-border px-6 py-3 flex items-center justify-between">
+      <div className="h-14 glass border-b border-border px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-          <span className="text-text-secondary text-sm capitalize">
-            {interview?.type} interview · {interview?.company || 'Standard'}
+          <span className="text-text-secondary text-xs md:text-sm capitalize font-medium">
+            {interview?.type} Interview · {interview?.company || 'Standard'}
           </span>
         </div>
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-4 md:gap-8">
           <div className="flex items-center gap-2">
-            <div className="w-24 h-1.5 bg-border rounded-full overflow-hidden">
+            <div className="w-16 md:w-32 h-1.5 bg-border rounded-full overflow-hidden hidden xs:block">
               <div
                 className="h-full rounded-full transition-all duration-500"
                 style={{ width: `${(qCount / MAX_Q) * 100}%`, background: 'linear-gradient(90deg, #4f8ef7, #22d3ee)' }}
               />
             </div>
-            <span className="font-mono text-xs text-text-secondary">{qCount}/{MAX_Q}</span>
+            <span className="font-mono text-[10px] md:text-xs text-text-secondary">{qCount}/{MAX_Q}</span>
           </div>
           {timerOn && (
-            <div className="flex items-center gap-1.5 font-mono text-sm text-text-secondary">
+            <div className="flex items-center gap-1.5 font-mono text-xs md:text-sm text-text-secondary">
               <Clock className="w-3.5 h-3.5" />
               <span className={timer > 120 ? 'text-warning' : ''}>{fmt(timer)}</span>
             </div>
@@ -339,248 +395,233 @@ export default function Interview() {
         </div>
       </div>
 
-      {/* Main Content: Video Grid Layout */}
-      <div className="flex-1 overflow-hidden p-4 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-4">
+      {/* Main Content */}
+      <div className="flex-1 overflow-hidden p-3 md:p-4 grid grid-cols-1 lg:grid-cols-[1fr_350px] xl:grid-cols-[1fr_400px] gap-3 md:gap-4">
         
         {/* Left: AI Avatar Panel */}
-        <div className="relative glass rounded-3xl overflow-hidden flex flex-col items-center justify-center border border-border/50">
-           {/* Q Counter */}
-           <div className="absolute top-6 right-6 px-4 py-1.5 rounded-full glass-bright border border-electric/30 text-xs font-bold text-electric">
+        <div className="relative glass rounded-2xl md:rounded-3xl overflow-hidden flex flex-col items-center border border-border/40 min-h-[300px]">
+           <div className="absolute top-4 right-4 md:top-6 md:right-6 px-3 py-1 rounded-full glass-bright border border-electric/30 text-[10px] font-bold text-electric z-10">
               QUESTION {qCount} / {MAX_Q}
            </div>
 
-           {/* Avatar */}
-           <div className="relative">
-              <div className={`w-48 h-48 rounded-full bg-panel border-4 border-border transition-all duration-300 flex items-center justify-center overflow-hidden relative ${isSpeaking ? 'speaking-ring' : ''}`}>
-                 <div className="w-full h-full bg-electric-gradient flex items-center justify-center">
-                    <Brain className="w-24 h-24 text-white opacity-90" />
-                 </div>
-                 
-                 {/* Mouth bars */}
-                 {isSpeaking && (
-                   <div className="absolute bottom-12 flex gap-1 items-end h-8">
-                     {[1,2,3,4,5].map(i => (
-                       <div key={i} className="mouth-bar" style={{ animationDelay: `${i * 0.12}s` }} />
-                     ))}
+           <div className="absolute inset-0 flex flex-col items-center justify-center p-6 space-y-6">
+              <div className="relative group">
+                <div className={`w-40 h-40 md:w-56 md:h-56 rounded-full bg-panel border-2 md:border-4 border-border/60 transition-all duration-500 flex items-center justify-center overflow-hidden relative ${isSpeaking ? 'speaking-ring scale-105' : ''}`}>
+                   <div className="w-full h-full bg-electric-gradient flex items-center justify-center">
+                      <Brain className="w-18 h-18 md:w-28 md:h-28 text-white opacity-90" />
                    </div>
-                 )}
+                   {isSpeaking && (
+                     <div className="absolute bottom-8 md:bottom-12 flex gap-1 items-end h-6 md:h-10">
+                       {[1,2,3,4,5].map(i => (
+                         <div key={i} className="mouth-bar" style={{ animationDelay: `${i * 0.12}s` }} />
+                       ))}
+                     </div>
+                   )}
+                </div>
+              </div>
+
+              <div className="text-center space-y-1">
+                <h2 className="text-2xl md:text-3xl font-extrabold text-text-primary">Alex Chen</h2>
+                <p className="text-[10px] md:text-xs text-text-secondary uppercase tracking-[0.2em] font-bold">Senior Technical Interviewer</p>
+              </div>
+
+              <div className="h-8 md:h-12 flex items-center gap-1.5">
+                {isSpeaking ? (
+                  [1,2,3,4,5,6,7,8,9,10,11,12].map(i => (
+                    <div key={i} className="wave-bar" style={{ animationDelay: `${i * 0.08}s` }} />
+                  ))
+                ) : (
+                  <div className="h-0.5 w-32 bg-border/40 rounded-full opacity-30" />
+                )}
               </div>
            </div>
 
-           <div className="mt-6 text-center">
-              <h2 className="text-2xl font-bold text-text-primary">Alex Chen</h2>
-              <p className="text-sm text-text-secondary uppercase tracking-widest mt-1">Senior Technical Interviewer</p>
-           </div>
-
-           {/* Waveform Visualization */}
-           <div className="mt-8 h-12 flex items-center gap-1">
-              {isSpeaking && [1,2,3,4,5,6,7,8,9,10].map(i => (
-                <div key={i} className="wave-bar" style={{ animationDelay: `${i * 0.08}s` }} />
-              ))}
-           </div>
-
-           {/* Speaking Label */}
            <AnimatePresence>
              {isSpeaking && (
                <motion.div 
-                 initial={{ opacity: 0, y: 10 }}
-                 animate={{ opacity: 1, y: 0 }}
-                 exit={{ opacity: 0, y: 10 }}
-                 className="absolute bottom-10 px-4 py-2 rounded-full bg-electric/10 border border-electric/30 text-electric text-xs flex items-center gap-2"
+                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}
+                 className="absolute bottom-6 md:bottom-10 px-4 py-1.5 rounded-full bg-electric/10 border border-electric/20 text-electric text-[10px] font-bold flex items-center gap-2 shadow-lg backdrop-blur-md"
                >
-                 <div className="w-2 h-2 rounded-full bg-electric animate-pulse" />
-                 Interviewer is speaking...
+                 <div className="w-1.5 h-1.5 rounded-full bg-electric animate-pulse" />
+                 INTERVIEWER IS SPEAKING
                </motion.div>
              )}
            </AnimatePresence>
         </div>
 
         {/* Right: Sidebar */}
-        <div className="flex flex-col gap-4 overflow-hidden">
+        <div className="flex flex-col gap-3 md:gap-4 overflow-hidden">
           
-          {/* User Video Panel */}
-          <div className="glass rounded-2xl p-5 flex flex-col items-center border border-border/50">
-            <div className="w-full h-40 bg-void rounded-xl border border-border flex items-center justify-center relative overflow-hidden group">
-               <User className="w-16 h-16 text-text-muted" />
-               <div className="absolute top-3 right-3 flex items-center gap-1.5 px-2 py-1 rounded-md bg-black/40 text-[10px] font-bold">
-                 <Video className="w-3 h-3 text-text-muted" />
-                 LIVE
+          <div className="glass rounded-xl md:rounded-2xl p-3 md:p-4 flex flex-col items-center border border-border/40 shrink-0">
+            <div className="w-full aspect-video md:h-36 bg-void rounded-lg border border-border/50 flex items-center justify-center relative overflow-hidden group">
+               <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  muted 
+                  playsInline 
+                  className="w-full h-full object-cover rounded-lg transform scale-x-[-1]" 
+               />
+               <div className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/60 text-[9px] font-bold text-white backdrop-blur-sm">
+                 <Video className="w-2.5 h-2.5 text-success" /> LIVE FEED
                </div>
                
                {recording && (
-                 <div className="absolute inset-0 bg-danger/5 flex items-center justify-center">
-                    <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2 py-1 rounded-md bg-danger/20 text-danger text-[10px] font-bold animate-pulse">
-                      <div className="w-1.5 h-1.5 rounded-full bg-danger" />
-                      REC
+                 <div className="absolute inset-0 bg-danger/10 flex flex-col items-center justify-center">
+                    <div className="absolute top-2 left-2 flex items-center gap-1 px-1.5 py-0.5 rounded bg-danger/80 text-white text-[9px] font-bold animate-pulse">
+                      <div className="w-1.5 h-1.5 rounded-full bg-white" /> REC
+                    </div>
+                    <div className="flex gap-1 items-end h-8">
+                      {[1,2,3,4,5,6].map(i => (
+                        <div key={i} className="wave-bar-sm" style={{ animationDelay: `${i * 0.1}s`, backgroundColor: 'white' }} />
+                      ))}
                     </div>
                  </div>
                )}
-
-               {/* User waveform */}
-               {recording && (
-                 <div className="absolute bottom-4 flex gap-1 items-end h-6">
-                   {[1,2,3,4,5,6].map(i => (
-                     <div key={i} className="wave-bar-sm" style={{ animationDelay: `${i * 0.1}s` }} />
-                   ))}
-                 </div>
-               )}
             </div>
-            <div className="mt-3 flex items-center justify-between w-full px-1">
-              <span className="text-xs font-semibold text-text-secondary">{user?.name || 'You'} (Candidate)</span>
-              <div className="flex gap-1.5">
+            <div className="mt-2.5 flex items-center justify-between w-full px-1">
+              <span className="text-[10px] font-bold text-text-secondary truncate tracking-tight">{user?.name || 'Candidate'}</span>
+              <div className="flex gap-1">
                  <div className={`w-1.5 h-1.5 rounded-full ${recording ? 'bg-danger' : 'bg-success'}`} />
                  <div className="w-1.5 h-1.5 rounded-full bg-border" />
               </div>
             </div>
           </div>
 
-          {/* Live Score Panel */}
-          <div className="glass rounded-2xl border border-border/50 overflow-hidden">
-             <div className="px-4 py-2.5 border-b border-border/50 flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-electric" />
-                <span className="text-[11px] font-bold uppercase tracking-wider text-text-secondary">Live Metrics</span>
-             </div>
-             <div className="grid grid-cols-2 gap-px bg-border/30">
-                {[
-                  { label: 'Clarity', val: quickScores.clarity, color: 'text-electric' },
-                  { label: 'Depth', val: quickScores.depth, color: 'text-cyan-400' },
-                  { label: 'Confidence', val: quickScores.confidence, color: 'text-success' },
-                  { label: 'Relevance', val: quickScores.relevance, color: 'text-warning' }
-                ].map(s => (
-                  <div key={s.label} className="bg-panel p-4 flex flex-col items-center justify-center">
-                     <span className={`text-xl font-bold ${s.color}`}>{s.val ?? '—'}</span>
-                     <span className="text-[10px] text-text-muted uppercase font-medium mt-0.5">{s.label}</span>
-                  </div>
-                ))}
-             </div>
-          </div>
-
-          {/* Transcript Panel */}
-          <div className="glass rounded-2xl border border-border/50 flex-1 flex flex-col overflow-hidden">
-             <div className="px-4 py-2.5 border-b border-border/50 flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-electric" />
-                <span className="text-[11px] font-bold uppercase tracking-wider text-text-secondary">Conversation</span>
-             </div>
-             <div ref={chatRef} className="flex-1 transcript-scroll p-4 space-y-4">
-                {messages.length === 0 && (
-                  <div className="h-full flex flex-col items-center justify-center text-text-muted opacity-50 space-y-2">
-                     <MessageSquare className="w-8 h-8" />
-                     <p className="text-xs">Transcript will appear here...</p>
-                  </div>
-                )}
-                {messages.map(msg => (
-                  <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                     <span className="text-[9px] font-bold uppercase tracking-wider text-text-muted mb-1 px-1">
-                       {msg.role === 'ai' ? 'Alex Chen' : user?.name || 'You'}
-                     </span>
-                     <div className={`max-w-[90%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
-                       msg.role === 'ai' 
-                       ? 'bg-electric/10 border border-electric/20 text-text-primary' 
-                       : 'bg-panel border border-border text-text-primary'
-                     }`}>
-                        {msg.content}
-                     </div>
-                  </div>
-                ))}
-                {aiTyping && (
-                  <div className="flex flex-col items-start">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-text-muted mb-1 px-1">Alex Chen</span>
-                    <div className="flex gap-1.5 p-2 items-center bg-electric/10 rounded-xl border border-electric/20">
-                      <div className="w-1.5 h-1.5 rounded-full bg-electric animate-bounce" />
-                      <div className="w-1.5 h-1.5 rounded-full bg-electric animate-bounce [animation-delay:0.2s]" />
-                      <div className="w-1.5 h-1.5 rounded-full bg-electric animate-bounce [animation-delay:0.4s]" />
+          <div className="flex-1 min-h-0 flex flex-col gap-3 md:gap-4 overflow-hidden">
+            <div className="glass rounded-xl border border-border/40 overflow-hidden shrink-0">
+               <div className="px-3 py-2 border-b border-border/30 flex items-center gap-2">
+                  <BarChart3 className="w-3.5 h-3.5 text-electric" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-text-secondary">Session Analytics</span>
+               </div>
+               <div className="grid grid-cols-4 lg:grid-cols-2 gap-px bg-border/20">
+                  {[
+                    { label: 'Clarity', val: quickScores.clarity, color: 'text-electric' },
+                    { label: 'Depth', val: quickScores.depth, color: 'text-cyan-400' },
+                    { label: 'Confidence', val: quickScores.confidence, color: 'text-success' },
+                    { label: 'Relevance', val: quickScores.relevance, color: 'text-warning' }
+                  ].map(s => (
+                    <div key={s.label} className="bg-panel p-2 md:p-3 flex flex-col items-center justify-center">
+                       <span className={`text-base md:text-lg font-bold ${s.color}`}>{s.val ?? '—'}</span>
+                       <span className="text-[8px] md:text-[9px] text-text-muted uppercase font-bold mt-0.5">{s.label}</span>
                     </div>
-                  </div>
-                )}
-             </div>
-          </div>
+                  ))}
+               </div>
+            </div>
 
+            <div className="glass rounded-xl border border-border/40 flex-1 flex flex-col overflow-hidden min-h-0">
+               <div className="px-3 py-2 border-b border-border/30 flex items-center gap-2 shrink-0">
+                  <MessageSquare className="w-3.5 h-3.5 text-electric" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-text-secondary">Discussion Stream</span>
+               </div>
+               <div ref={chatRef} className="flex-1 transcript-scroll p-4 space-y-4 overflow-y-auto">
+                  {messages.length === 0 && !transcribingText && (
+                    <div className="h-full flex flex-col items-center justify-center text-text-muted opacity-30 space-y-2">
+                       <MessageSquare className="w-8 h-8" />
+                       <p className="text-[11px] font-medium uppercase tracking-widest">Awaiting interaction</p>
+                    </div>
+                  )}
+                  {messages.map(msg => (
+                    <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                       <div className={`flex items-center gap-2 mb-1 px-1 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                          <span className={`text-[9px] font-bold uppercase tracking-wider ${msg.role === 'ai' ? 'text-electric' : 'text-text-muted'}`}>
+                            {msg.role === 'ai' ? 'Interviewer (Alex Chen)' : 'You (Candidate)'}
+                          </span>
+                       </div>
+                       <div className={`max-w-[90%] rounded-xl px-3 py-2 text-[11px] leading-relaxed shadow-sm ${
+                         msg.role === 'ai' 
+                         ? 'bg-electric/10 border border-electric/20 text-text-primary' 
+                         : 'bg-panel border border-border/50 text-text-primary'
+                       }`}>
+                          {msg.content}
+                       </div>
+                    </div>
+                  ))}
+                  
+                  <AnimatePresence>
+                    {transcribingText && (
+                      <motion.div 
+                        initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }}
+                        className="flex flex-col items-end"
+                      >
+                         <span className="text-[9px] font-bold uppercase tracking-wider text-electric mb-1 px-1">You (Transcribing...)</span>
+                         <div className="max-w-[90%] rounded-xl px-3 py-2 text-[11px] leading-relaxed bg-electric/5 border border-dashed border-electric/40 text-text-secondary italic">
+                            {transcribingText}
+                         </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {aiTyping && (
+                    <div className="flex flex-col items-start">
+                      <span className="text-[9px] font-bold uppercase text-electric mb-1 px-1">Interviewer (Thinking...)</span>
+                      <div className="flex gap-1.5 p-2 bg-electric/10 rounded-xl border border-electric/20">
+                        <div className="w-1.5 h-1.5 rounded-full bg-electric animate-bounce" />
+                        <div className="w-1.5 h-1.5 rounded-full bg-electric animate-bounce [animation-delay:0.2s]" />
+                        <div className="w-1.5 h-1.5 rounded-full bg-electric animate-bounce [animation-delay:0.4s]" />
+                      </div>
+                    </div>
+                  )}
+               </div>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Bottom Controls */}
-      <div className="p-4 border-t border-border/50 glass">
-        <div className="max-w-4xl mx-auto flex flex-col items-center gap-4">
+      <div className="h-28 md:h-32 border-t border-border/40 glass p-3 md:p-4 shrink-0 z-20">
+        <div className="max-w-4xl mx-auto flex flex-col items-center h-full justify-between">
           
-          {/* Status Message */}
-          <div className="text-[11px] text-text-muted font-medium flex items-center gap-2">
-             {phase === 'intro' ? 'Interview is ready to begin' : 
-              phase === 'qa' ? (recording ? 'Recording... click to stop' : 'Press microphone to answer or type below') :
-              'Interview complete. Compiling results...'}
+          <div className="text-[10px] text-text-muted font-black tracking-widest uppercase flex items-center gap-2">
+             {phase === 'intro' ? 'Interviewer system online' : 
+              phase === 'qa' ? (recording ? 'Recording capture active...' : (loading ? 'Analyzing response...' : 'Select microphone to speak')) :
+              'Session finalized'}
           </div>
 
-          <div className="w-full flex items-end gap-4">
-            {/* Answer Input Area */}
+          <div className="w-full flex items-center justify-center gap-6 md:gap-16">
             {phase === 'qa' && (
-              <div className="flex-1 glass-bright rounded-2xl p-2 border border-electric/20 flex flex-col">
-                <textarea
-                  value={answer}
-                  onChange={e => setAnswer(e.target.value)}
-                  onKeyDown={handleKey}
-                  placeholder="Type your answer here..."
-                  disabled={loading || aiTyping}
-                  rows={2}
-                  className="w-full bg-transparent text-text-primary placeholder:text-text-muted text-sm outline-none px-3 py-2 resize-none"
-                />
-                <div className="flex justify-end p-1">
-                   <button
-                    onClick={submitAnswer}
-                    disabled={!answer.trim() || loading || aiTyping}
-                    className="p-2 rounded-xl bg-electric hover:bg-electric-hover disabled:opacity-30 text-white transition-all shadow-lg"
-                   >
-                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                   </button>
-                </div>
-              </div>
+              <button
+                onClick={handleEndSession}
+                className="w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center border border-danger/20 text-danger/40 hover:text-danger hover:bg-danger/10 transition-all hover:scale-110 active:scale-90"
+                title="End Session"
+              >
+                 <PhoneOff className="w-5 h-5" />
+              </button>
             )}
 
-            {phase === 'intro' && !aiTyping && (
-              <div className="flex-1 flex justify-center pb-4">
-                <button
-                  onClick={beginInterview}
-                  className="btn-primary py-4 px-12 glow-electric text-lg font-bold group"
-                >
-                  <Brain className="w-5 h-5 group-hover:rotate-12 transition-transform" />
-                  BEGIN INTERVIEW SESSION
-                </button>
-              </div>
-            )}
-
-            {/* Central Control: Microphone */}
-            {phase === 'qa' && (
-              <div className="flex flex-col items-center gap-2">
+            {phase === 'intro' ? (
+              <button
+                onClick={beginInterview}
+                disabled={aiTyping}
+                className="btn-primary py-3 px-10 md:py-4 md:px-20 glow-electric text-sm md:text-base font-black tracking-widest transition-all hover:scale-105 active:scale-95 shadow-xl"
+              >
+                <Brain className="w-4 h-4 md:w-6 md:h-6" />
+                COMMENCE INTERVIEW
+              </button>
+            ) : phase === 'qa' ? (
+              <div className="relative group">
                 <button
                   onClick={toggleRecording}
                   disabled={isSpeaking || loading}
-                  className={`w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300 relative ${
+                  className={`w-14 h-14 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all duration-500 shadow-2xl ${
                     recording 
-                    ? 'bg-danger text-white scale-110 shadow-[0_0_20px_rgba(239,68,68,0.4)]' 
-                    : 'bg-void border-2 border-electric text-electric hover:bg-electric/10'
-                  } disabled:opacity-30`}
+                    ? 'bg-danger text-white scale-110 ring-8 ring-danger/20' 
+                    : 'bg-void border-2 border-electric text-electric hover:bg-electric hover:text-white'
+                  } disabled:opacity-20`}
                 >
-                   {recording ? <MicOff className="w-7 h-7" /> : <Mic className="w-7 h-7" />}
-                   {recording && (
-                     <div className="absolute inset-0 rounded-full border-4 border-danger animate-ping opacity-30" />
-                   )}
+                   {loading ? <Loader2 className="w-6 h-6 md:w-10 md:h-10 animate-spin" /> : 
+                    (recording ? <MicOff className="w-6 h-6 md:w-10 md:h-10" /> : <Mic className="w-6 h-6 md:w-10 md:h-10" />)}
                 </button>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
-                  {recording ? 'Stop' : 'Press to talk'}
+                <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-[9px] font-black uppercase text-text-muted whitespace-nowrap opacity-60 group-hover:opacity-100 transition-opacity tracking-[0.1em]">
+                  {recording ? 'CLICK TO STOP' : (loading ? 'PROCESSING' : 'PRESS TO TALK')}
                 </span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 text-success font-black text-xs uppercase tracking-[0.2em] animate-pulse">
+                <CheckCircle2 className="w-5 h-5" /> GENERATING EVALUATION
               </div>
             )}
 
-            {/* End Button */}
-            {phase === 'qa' && (
-              <div className="flex flex-col items-center gap-2">
-                <button
-                  onClick={() => navigate('/dashboard')}
-                  className="w-12 h-12 rounded-full flex items-center justify-center border border-danger/30 text-danger hover:bg-danger/10 transition-colors"
-                >
-                   <PhoneOff className="w-5 h-5" />
-                </button>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Exit</span>
-              </div>
-            )}
+            {phase === 'qa' && <div className="w-10 md:w-12" />}
           </div>
         </div>
       </div>

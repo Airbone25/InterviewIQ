@@ -42,4 +42,48 @@ router.post('/transcribe', auth, upload.single('audio'), async (req, res) => {
   }
 })
 
+// ─── POST /api/speech/tts ─────────────────────────────────────────────────────
+router.post('/tts', auth, async (req, res) => {
+  try {
+    const { text, voiceId = 'JBFqnCBsd6RMkjVDRZzb' } = req.body // Rachel professional voice
+    if (!text) return res.status(400).json({ message: 'Text is required' })
+
+    if (!process.env.ELEVENLABS_API_KEY) {
+      return res.status(500).json({ message: 'ElevenLabs API key not configured' })
+    }
+
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': process.env.ELEVENLABS_API_KEY,
+      },
+      body: JSON.stringify({
+        text,
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.5,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const err = await response.json()
+      throw new Error(err.detail?.message || 'ElevenLabs TTS failed')
+    }
+
+    const audioBuffer = await response.arrayBuffer()
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': audioBuffer.byteLength,
+    })
+    res.send(Buffer.from(audioBuffer))
+  } catch (err) {
+    console.error('TTS error:', err)
+    res.status(500).json({ message: err.message })
+  }
+})
+
 module.exports = router
