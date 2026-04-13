@@ -17,11 +17,35 @@ const speechRoutes = require('./routes/speech')
 const app = express()
 const PORT = process.env.PORT
 
-app.use(helmet())
-app.use(cors({
-  origin: process.env.FRONTEND_URL,
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  process.env.CORS_ORIGINS,
+  'http://localhost:5173',
+  'https://localhost:5173',
+  'http://127.0.0.1:5173',
+  'https://127.0.0.1:5173',
+]
+  .filter(Boolean)
+  .flatMap(value => value.split(',').map(origin => origin.trim()))
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser clients like curl/postman that may not send Origin.
+    if (!origin) return callback(null, true)
+
+    const isAllowed =
+      allowedOrigins.includes(origin) ||
+      /https:\/\/[a-z0-9-]+-(5173|3000)\.inc1\.devtunnels\.ms$/i.test(origin)
+
+    if (isAllowed) return callback(null, true)
+
+    return callback(new Error(`CORS blocked origin: ${origin}`))
+  },
   credentials: true,
-}))
+}
+
+app.use(helmet())
+app.use(cors(corsOptions))
 app.use(morgan('dev'))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))

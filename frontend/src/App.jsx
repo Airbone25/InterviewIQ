@@ -3,16 +3,17 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useAuthStore } from './context/auth.js'
 
-import Landing   from './pages/Landing.jsx'
-import Login     from './pages/Login.jsx'
-import Signup    from './pages/Signup.jsx'
-import Dashboard from './pages/Dashboard.jsx'
-import Interview from './pages/Interview.jsx'
-import Results   from './pages/Results.jsx'
-import Resume    from './pages/Resume.jsx'
+import Landing     from './pages/Landing.jsx'
+import Login       from './pages/Login.jsx'
+import Signup      from './pages/Signup.jsx'
+import Dashboard   from './pages/Dashboard.jsx'
+import Interview   from './pages/Interview.jsx'
+import Results     from './pages/Results.jsx'
+import Resume      from './pages/Resume.jsx'
 import Leaderboard from './pages/Leaderboard.jsx'
+import Profile     from './pages/Profile.jsx'
 import NotFound    from './pages/NotFound.jsx'
-import Navbar    from './components/Navbar.jsx'
+import Navbar      from './components/Navbar.jsx'
 
 function ProtectedRoute({ children }) {
   const { token, initialized } = useAuthStore()
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/dashboard"     element={<ProtectedRoute><motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}><Dashboard /></motion.div></ProtectedRoute>} />
           <Route path="/leaderboard"   element={<ProtectedRoute><motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}><Leaderboard /></motion.div></ProtectedRoute>} />
           <Route path="/resume"        element={<ProtectedRoute><motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}><Resume /></motion.div></ProtectedRoute>} />
+          <Route path="/profile"       element={<ProtectedRoute><motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}><Profile /></motion.div></ProtectedRoute>} />
           <Route path="/interview/:id" element={<ProtectedRoute><motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><Interview /></motion.div></ProtectedRoute>} />
           <Route path="/results/:id"   element={<ProtectedRoute><motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.05 }}><Results /></motion.div></ProtectedRoute>} />
           <Route path="*"              element={<NotFound />} />
