@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
+import { Analytics } from '@vercel/analytics/react'
 import { useAuthStore } from './context/auth.js'
 
 import Landing     from './pages/Landing.jsx'
@@ -62,6 +63,7 @@ export default function App() {
           <Route path="*"              element={<NotFound />} />
         </Routes>
       </AnimatePresence>
+      <Analytics />
     </div>
   )
 }
